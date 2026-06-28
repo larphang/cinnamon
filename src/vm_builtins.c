@@ -332,6 +332,7 @@ static const BuiltinVarEntry BUILTIN_VAR_TABLE[] = {
     { "os_type", BUILTIN_VAR_OS_TYPE },
     { "os_unknown", BUILTIN_VAR_OS_UNKNOWN },
     { "os_uwp", BUILTIN_VAR_OS_UWP },
+    { "os_wii", BUILTIN_VAR_OS_WII },
     { "os_wiiu", BUILTIN_VAR_OS_WIIU },
     { "os_win32", BUILTIN_VAR_OS_WIN32 },
     { "os_win8native", BUILTIN_VAR_OS_WIN8NATIVE },
@@ -463,6 +464,8 @@ RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* 
             return RValue_makeReal(OS_WIN8NATIVE);
         case BUILTIN_VAR_OS_WIIU:
             return RValue_makeReal(OS_WIIU);
+        case BUILTIN_VAR_OS_WII:
+            return RValue_makeReal(OS_WII);
         case BUILTIN_VAR_OS_3DS:
             return RValue_makeReal(OS_3DS);
         case BUILTIN_VAR_OS_PSVITA:

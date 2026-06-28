@@ -2,6 +2,7 @@ build/
 build_ps2/
 .gitignore
 .cache
+.vscode
 
 .vscode/tasks.json
 resources/3ds/romfs/audio/

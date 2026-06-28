@@ -232,7 +232,86 @@ elseif(PLATFORM STREQUAL "wiiu")
         TVSPLASH ${BUTTERSCOTCH_WIIU_TV_SPLASH}
         CONTENT ${CMAKE_SOURCE_DIR}/resources/wiiu/content
     )
+elseif(PLATFORM STREQUAL "wii")
+    add_compile_definitions(USE_FLOAT_REALS)
+    add_compile_definitions(NO_RVALUE_INT64)
 
+    target_sources(butterscotch PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/gl/image_decoder.c
+    )
+
+    if(DEFINED ENV{DEVKITPRO} AND NOT "$ENV{DEVKITPRO}" STREQUAL "")
+        file(TO_CMAKE_PATH "$ENV{DEVKITPRO}" DEVKITPRO_ROOT)
+    elseif(EXISTS "C:/devkitPro")
+        file(TO_CMAKE_PATH "C:/devkitPro" DEVKITPRO_ROOT)
+    else()
+        message(FATAL_ERROR "DEVKITPRO is not set and C:/devkitPro was not found.")
+    endif()
+
+    target_compile_definitions(butterscotch PRIVATE 
+        IS_BIG_ENDIAN
+        IMAGE_DECODER_HAS_BZ2=0
+    )
+
+    target_compile_options(butterscotch PRIVATE
+        -O3
+        -ffunction-sections
+        -fdata-sections
+        -fsingle-precision-constant
+        -fomit-frame-pointer
+        -ffast-math
+    )
+
+    target_include_directories(butterscotch PRIVATE
+        ${CMAKE_SOURCE_DIR}/vendor
+        ${CMAKE_SOURCE_DIR}/vendor/stb/image
+        ${CMAKE_SOURCE_DIR}/vendor/stb/vorbis
+        ${CMAKE_SOURCE_DIR}/vendor/miniaudio
+
+        ${DEVKITPRO_ROOT}/libogc/include
+        ${DEVKITPRO_ROOT}/portlibs/ppc/include
+        ${DEVKITPRO_ROOT}/portlibs/wii/include
+    )
+
+    target_link_directories(butterscotch PRIVATE
+        ${DEVKITPRO_ROOT}/portlibs/ppc/lib
+        ${DEVKITPRO_ROOT}/portlibs/wii/lib
+    )
+
+    # the wii is very strict with linking order so we do a group
+    target_link_libraries(butterscotch PRIVATE
+        -Wl,--start-group
+
+        grrlib
+        pngu
+        jpeg
+        
+        freetype
+        bz2
+
+        png
+        z
+
+        wiiuse
+        fat
+
+        modplay
+        aesnd
+
+        ogc
+        m
+
+        brotlidec
+        brotlicommon
+
+        -Wl,--end-group
+    )
+
+    set_target_properties(butterscotch PROPERTIES
+        OUTPUT_NAME boot
+    )
+
+    ogc_create_dol(butterscotch)
 elseif(PLATFORM STREQUAL "ps2")
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)

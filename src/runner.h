@@ -85,6 +85,7 @@ typedef enum {
     OS_TIZEN,
     OS_WIN8NATIVE,
     OS_WIIU,
+    OS_WII,
     OS_3DS,
     OS_PSVITA,
     OS_BB10,
