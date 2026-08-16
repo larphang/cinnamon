@@ -3,9 +3,13 @@
 #include <ogc/video.h>
 #include <malloc.h>
 #include <string.h>
+#include <math.h>
 
 #include <stb/image/stb_image.h>
 #include <stb/image/stb_image_write.h>
+
+#include "../text_utils.h"
+#include "../utils.h"
 
 #ifndef MIN
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
@@ -366,7 +370,18 @@ static void WiiRenderer_drawSprite(Renderer* base, int32_t tpagIndex, float x, f
         );
     }
 }
-static void WiiRenderer_drawSpritePart(Renderer* base, int32_t tpagIndex, int32_t srcOffX, int32_t srcOffY, int32_t srcW, int32_t srcH, float x, float y, float xscale, float yscale, float angleDeg, float pivotX, float pivotY, uint32_t color, float alpha){
+
+static void WiiRenderer_drawSpritePart(Renderer* base,
+                                      int32_t tpagIndex,
+                                      int32_t srcOffX, int32_t srcOffY,
+                                      int32_t srcW, int32_t srcH,
+                                      float x, float y,
+                                      float xscale, float yscale,
+                                      float angleDeg,
+                                      float pivotX, float pivotY,
+                                      uint32_t color,
+                                      float alpha)
+{
     WiiRenderer* renderer = (WiiRenderer*)base;
 
     float drawX = x - pivotX * xscale;
@@ -377,7 +392,10 @@ static void WiiRenderer_drawSpritePart(Renderer* base, int32_t tpagIndex, int32_
     uint8_t b = color & 0xFF;
     uint8_t a = (uint8_t)(alpha * 255.0f);
 
-    for (int i = 0; i < renderer->pageCount; i++) {
+    u32 gxColor = RGBA(r, g, b, a);
+
+    for (int i = 0; i < renderer->pageCount; i++)
+    {
         WiiTexturePage* page = &renderer->pages[i];
 
         if (page->parentId != tpagIndex)
@@ -392,34 +410,40 @@ static void WiiRenderer_drawSpritePart(Renderer* base, int32_t tpagIndex, int32_
         int iy1 = MAX(srcOffY, page->offsetY);
 
         int ix2 = MIN(srcOffX + srcW, page->offsetX + page->width);
-
         int iy2 = MIN(srcOffY + srcH, page->offsetY + page->height);
 
         if (ix1 >= ix2 || iy1 >= iy2)
             continue;
 
-        int tileSrcX = ix1 - page->offsetX;
-        int tileSrcY = iy1 - page->offsetY;
-
         int pieceW = ix2 - ix1;
         int pieceH = iy2 - iy1;
 
         float pieceDrawX = drawX + (ix1 - srcOffX) * xscale;
-
         float pieceDrawY = drawY + (iy1 - srcOffY) * yscale;
 
-        GRRLIB_DrawPart(
-            pieceDrawX,
-            pieceDrawY,
-            tileSrcX,
-            tileSrcY,
-            pieceW,
-            pieceH,
+
+        guVector quad[4];
+
+        quad[0].x = pieceDrawX;
+        quad[0].y = pieceDrawY;
+        quad[0].z = 0.0f;
+
+        quad[1].x = pieceDrawX + pieceW * xscale;
+        quad[1].y = pieceDrawY;
+        quad[1].z = 0.0f;
+
+        quad[2].x = pieceDrawX + pieceW * xscale;
+        quad[2].y = pieceDrawY + pieceH * yscale;
+        quad[2].z = 0.0f;
+
+        quad[3].x = pieceDrawX;
+        quad[3].y = pieceDrawY + pieceH * yscale;
+        quad[3].z = 0.0f;
+
+        GRRLIB_DrawImgQuad(
+            quad,
             page->tex,
-            angleDeg,
-            xscale,
-            yscale,
-            RGBA(r, g, b, a)
+            gxColor
         );
     }
 }
@@ -455,11 +479,27 @@ static void WiiRenderer_drawRectangle(Renderer* renderer,
                                       bool outline)
 {
     (void)renderer;
-    (void)x1; (void)y1;
-    (void)x2; (void)y2;
-    (void)color;
-    (void)alpha;
-    (void)outline;
+
+    float x = x1;
+    float y = y1;
+    float w = x2 - x1;
+    float h = y2 - y1;
+
+    if (w < 0) { w = -w; x = x2; }
+    if (h < 0) { h = -h; y = y2; }
+
+    uint8_t a = (uint8_t)(fmaxf(0.0f, fminf(alpha, 1.0f)) * 255.0f);
+
+    uint32_t argb = (color & 0x00FFFFFF) | ((uint32_t)a << 24);
+
+    if (outline) {
+        GRRLIB_Line(x,     y,     x + w, y,     argb);
+        GRRLIB_Line(x + w, y,     x + w, y + h, argb);
+        GRRLIB_Line(x + w, y + h, x,     y + h, argb);
+        GRRLIB_Line(x,     y + h, x,     y,     argb);
+    } else {
+        GRRLIB_Rectangle(x, y, w, h, argb, true);
+    }
 }
 
 static void WiiRenderer_drawLine(Renderer* renderer,
@@ -484,10 +524,17 @@ static void WiiRenderer_drawTriangle(Renderer* renderer,
                                      bool outline)
 {
     (void)renderer;
-    (void)x1; (void)y1;
-    (void)x2; (void)y2;
-    (void)x3; (void)y3;
-    (void)outline;
+
+
+    guVector v[3];
+
+    v[0].x = x1; v[0].y = y1; v[0].z = 0.0f;
+    v[1].x = x2; v[1].y = y2; v[1].z = 0.0f;
+    v[2].x = x3; v[2].y = y3; v[2].z = 0.0f;
+
+    u32 col[3] = { 0xFF, 0xFF, 0xFF };
+
+    GRRLIB_NGoneFilled(v, col, 3);
 }
 
 static void WiiRenderer_drawLineColor(Renderer* renderer,
@@ -499,46 +546,125 @@ static void WiiRenderer_drawLineColor(Renderer* renderer,
                                       float alpha)
 {
     (void)renderer;
-    (void)x1; (void)y1;
-    (void)x2; (void)y2;
-    (void)width;
-    (void)color1;
-    (void)color2;
-    (void)alpha;
+
+    uint8_t a = (uint8_t)(fmaxf(0.0f, fminf(alpha, 1.0f)) * 255.0f);
+
+    uint32_t c1 = (color1 & 0x00FFFFFF) | ((uint32_t)a << 24);
+    uint32_t c2 = (color2 & 0x00FFFFFF) | ((uint32_t)a << 24);
+
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    float len = sqrtf(dx * dx + dy * dy);
+
+    if (len < 0.0001f) {
+        GRRLIB_Rectangle(x1, y1, width, width, c1, true);
+        return;
+    }
+
+    float steps = len / 4.0f;
+    if (steps < 1) steps = 1;
+
+    float prevX = x1;
+    float prevY = y1;
+
+    for (int i = 1; i <= (int)steps; i++) {
+        float t = (float)i / steps;
+
+        float nx = x1 + dx * t;
+        float ny = y1 + dy * t;
+
+        uint8_t r1 = (c1 >> 16) & 0xFF;
+        uint8_t g1 = (c1 >> 8) & 0xFF;
+        uint8_t b1 = c1 & 0xFF;
+
+        uint8_t r2 = (c2 >> 16) & 0xFF;
+        uint8_t g2 = (c2 >> 8) & 0xFF;
+        uint8_t b2 = c2 & 0xFF;
+
+        uint8_t r = (uint8_t)(r1 + (r2 - r1) * t);
+        uint8_t g = (uint8_t)(g1 + (g2 - g1) * t);
+        uint8_t b = (uint8_t)(b1 + (b2 - b1) * t);
+
+        uint32_t col = (a << 24) | (r << 16) | (g << 8) | b;
+
+        GRRLIB_Line(prevX, prevY, nx, ny, col);
+
+        prevX = nx;
+        prevY = ny;
+    }
 }
 
-static void WiiRenderer_drawText(Renderer* renderer,
+static void WiiRenderer_drawText(Renderer* base,
                                  const char* text,
                                  float x, float y,
                                  float xscale, float yscale,
                                  float angleDeg)
 {
-    (void)renderer;
-    (void)text;
-    (void)x; (void)y;
-    (void)xscale; (void)yscale;
-    (void)angleDeg;
-}
+    WiiRenderer* renderer = (WiiRenderer*)base;
+    DataWin* dataWin = base->dataWin;
 
-static void WiiRenderer_drawTextColor(Renderer* renderer,
-                                      const char* text,
-                                      float x, float y,
-                                      float xscale, float yscale,
-                                      float angleDeg,
-                                      int32_t c1,
-                                      int32_t c2,
-                                      int32_t c3,
-                                      int32_t c4,
-                                      float alpha)
-{
-    (void)renderer;
-    (void)text;
-    (void)x; (void)y;
-    (void)xscale; (void)yscale;
-    (void)angleDeg;
-    (void)c1; (void)c2;
-    (void)c3; (void)c4;
-    (void)alpha;
+    int32_t fontIndex = base->drawFont;
+    if (fontIndex < 0 || (uint32_t)fontIndex >= dataWin->font.count)
+        return;
+
+    Font* font = &dataWin->font.fonts[fontIndex];
+    int32_t fontTpagIndex = font->tpagIndex;
+    if (fontTpagIndex < 0 || (uint32_t)fontTpagIndex >= dataWin->tpag.count)
+        return;
+
+    TexturePageItem* tpag = &dataWin->tpag.items[fontTpagIndex];
+
+    int32_t texPageId = tpag->texturePageId;
+    if (texPageId < 0 || (uint32_t)texPageId >= renderer->pageCount)
+        return;
+
+    WiiTexturePage* page = &renderer->pages[texPageId];
+    WiiRenderer_ensureTextureLoaded(renderer, texPageId);
+
+    if (!page->tex || !page->tex->data)
+        return;
+
+    float cursorX = x;
+    float cursorY = y;
+
+    const char* p = text;
+
+    while (*p)
+    {
+        uint8_t ch = (uint8_t)*p++;
+
+        if (ch == '\n')
+        {
+            cursorX = x;
+            cursorY += font->emSize * yscale;
+            continue;
+        }
+
+        FontGlyph* glyph = TextUtils_findGlyph(font, ch);
+        if (!glyph)
+            continue;
+
+        if (glyph->sourceWidth == 0 || glyph->sourceHeight == 0)
+        {
+            cursorX += glyph->shift * xscale;
+            continue;
+        }
+
+        float drawX = cursorX + glyph->offset * xscale;
+        float drawY = cursorY;
+
+        float srcX = (float)glyph->sourceX;
+        float srcY = (float)glyph->sourceY;
+        float srcW = (float)glyph->sourceWidth;
+        float srcH = (float)glyph->sourceHeight;
+
+        GRRLIB_DrawPart(drawX, drawY, srcX, srcY, srcW, srcH, page->tex, angleDeg, xscale, yscale,
+            //base->drawColor
+            RGBA(255, 255, 255, 255)
+        );
+
+        cursorX += glyph->shift * xscale;
+    }
 }
 
 static void WiiRenderer_flush(Renderer* renderer)
@@ -803,18 +929,55 @@ static void WiiRenderer_drawTiledPart(Renderer* renderer,
                                       uint32_t color,
                                       float alpha)
 {
-    (void)renderer;
-    (void)tpagIndex;
-    (void)srcX;
-    (void)srcY;
-    (void)srcW;
-    (void)srcH;
-    (void)dstX;
-    (void)dstY;
-    (void)dstW;
-    (void)dstH;
-    (void)color;
-    (void)alpha;
+    WiiRenderer* self = (WiiRenderer*)renderer;
+
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+    uint8_t a = (uint8_t)(fmaxf(0.0f, fminf(alpha, 1.0f)) * 255.0f);
+
+    uint32_t col = RGBA(r, g, b, a);
+
+    for (int i = 0; i < self->pageCount; i++) {
+        WiiTexturePage* page = &self->pages[i];
+
+        if (page->parentId != tpagIndex)
+            continue;
+
+        WiiRenderer_ensureTextureLoaded(self, i);
+
+        if (!page->tex)
+            continue;
+
+        int ix1 = MAX(srcX, page->offsetX);
+        int iy1 = MAX(srcY, page->offsetY);
+
+        int ix2 = MIN(srcX + srcW, page->offsetX + page->width);
+        int iy2 = MIN(srcY + srcH, page->offsetY + page->height);
+
+        if (ix1 >= ix2 || iy1 >= iy2)
+            continue;
+
+        int tileSrcX = ix1 - page->offsetX;
+        int tileSrcY = iy1 - page->offsetY;
+
+        int pieceW = ix2 - ix1;
+        int pieceH = iy2 - iy1;
+
+        float pieceDstX = dstX + (float)(ix1 - srcX);
+        float pieceDstY = dstY + (float)(iy1 - srcY);
+
+        float scaleX = dstW / (float)srcW;
+        float scaleY = dstH / (float)srcH;
+
+        pieceDstX = dstX + (float)(ix1 - srcX) * scaleX;
+        pieceDstY = dstY + (float)(iy1 - srcY) * scaleY;
+
+        float pieceDstW = (float)pieceW * scaleX;
+        float pieceDstH = (float)pieceH * scaleY;
+
+        GRRLIB_DrawPart(pieceDstX, pieceDstY,tileSrcX, tileSrcY, pieceW, pieceH, page->tex, 0.0f,scaleX, scaleY, col);
+    }
 }
 
 static void WiiRenderer_init(Renderer* base, DataWin* dataWin) {
@@ -868,7 +1031,6 @@ static RendererVtable WiiRendererVtable = {
     .drawLineColor = WiiRenderer_drawLineColor,
 
     .drawText = WiiRenderer_drawText,
-    .drawTextColor = WiiRenderer_drawTextColor,
 
     .flush = WiiRenderer_flush,
     .clearScreen = WiiRenderer_clearScreen,

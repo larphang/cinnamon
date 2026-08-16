@@ -16,8 +16,23 @@ typedef struct {
 
     int parentId;
 
-    //bool dumped;
+    bool dumped;
 } WiiTexturePage;
+
+typedef struct WiiQuad {
+    float x0, y0;
+    float x1, y1;
+    float x2, y2;
+    float x3, y3;
+
+    float u0, v0;
+    float u1, v1;
+
+    uint32_t color;
+    int texturePageId;
+} WiiQuad;
+
+#define MAX_QUADS 2048
 
 typedef struct {
     Renderer base;
@@ -42,8 +57,12 @@ typedef struct {
     uint32_t batchVertexCount;
     uint32_t queuedQuadCount;
 
+    WiiQuad quadBuffer[MAX_QUADS];
+    int quadCount;
+
     WiiTexturePage* pages;
     int pageCount;
+    
 } WiiRenderer;
 
 Renderer* WiiRenderer_create(void);

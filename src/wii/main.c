@@ -5,7 +5,6 @@
 
 #include "../noop_audio_system.h"
 #include "../noop_file_system.h"
-
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -17,6 +16,7 @@
 #include <wiiuse/wpad.h>
 
 #include "wii_renderer.h"
+#include "wii_file_system.h"
 
 typedef struct {
     
@@ -141,10 +141,6 @@ int main(int argc, char* argv[]) {
 
     WPAD_Init();
     WPAD_SetDataFormat(WPAD_CHAN_ALL, WPAD_FMT_BTNS_ACC_IR);
-    
-    printf("\x1b[2;0H");
-
-	printf("Hello World!\n");
 
     dataWinPath = argc > 1 ? strdup(argv[1]) : buildDefaultDataWinPath(argv[0]);
 
@@ -181,17 +177,10 @@ int main(int argc, char* argv[]) {
             .progressCallbackUserData = &loadingState,
         }
     );
-
-    free(dataWinPath);
-
-    printf("\x1b[4;0H");
-    if (dataWin == NULL)
-        printf("Failed to load data.win.");
-    else
-        printf("Successfully loaded data.win!");
-
+    
     fileSystem = (FileSystem*) NoopFileSystem_create();
     audioSystem = (AudioSystem*) NoopAudioSystem_create();
+    free(dataWinPath);
 
     vm = VM_create(dataWin);
     renderer = WiiRenderer_create();
@@ -204,7 +193,7 @@ int main(int argc, char* argv[]) {
     WiiInputState inputState;
     memset(&inputState, 0, sizeof(inputState));
 
-    while (SYS_MainLoop()/*  && !runner->shouldExit */) {
+    while (SYS_MainLoop() && !runner->shouldExit ) {
         WPAD_ScanPads();
         WPADData* data = WPAD_Data(0);
         u32 pressed = WPAD_ButtonsDown(0);
@@ -263,6 +252,8 @@ int main(int argc, char* argv[]) {
 
         runner->viewCurrent = 0;
         renderer->vtable->endFrame(renderer);
+
+        RunnerKeyboard_beginFrame(runner->keyboard);
     }
 
     WPAD_Shutdown();
