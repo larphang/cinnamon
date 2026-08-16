@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include "string_compat.h"
 #include <bzlib.h>
-#endif
 
 #include "log.h"
 

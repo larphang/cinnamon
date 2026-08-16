@@ -1,0 +1,46 @@
+{
+    "configurations": [
+        {
+            "name": "Wii {Debug}",
+            "includePath": [
+                "src/",
+                "C:/devkitPro/libogc/include"
+                
+            ],
+            "defines": [
+                "__WII__",
+                "__DEBUG__=1"
+            ],
+            "windowsSdkVersion": "10.0.26100.0",
+            "compilerPath": "C:/devkitpro/devkitPPC/bin/powerpc-eabi-g++",
+            "cStandard": "c11",
+            "cppStandard": "c++20",
+            "mergeConfigurations": false,
+            "recursiveIncludes": {},
+            "browse": {
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "intelliSenseMode": "windows-gcc-arm"
+        },
+        {
+            "name": "Wii",
+            "includePath": [
+                "src/"
+            ],
+            "defines": [
+                "__WII__"
+            ],
+            "windowsSdkVersion": "10.0.26100.0",
+            "compilerPath": "C:/devkitpro/devkitPPC/bin/powerpc-eabi-g++",
+            "cStandard": "c11",
+            "cppStandard": "c++20",
+            "mergeConfigurations": false,
+            "recursiveIncludes": {},
+            "browse": {
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "intelliSenseMode": "windows-gcc-arm"
+        }
+    ],
+    "version": 4
+}
