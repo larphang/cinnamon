@@ -1,11 +1,8 @@
-build/
-build_ps2/
+build*/
 .gitignore
 .cache
-.vscode
-
-.vscode/tasks.json
-resources/3ds/romfs/audio/
-resources/3ds/romfs/borders/
-resources/3ds/romfs/gfx/
-resources/3ds/romfs/*.bcwav
+CMakeUserPresets.json
+.devcontainer/
+compat/config.mk
+/.vs
+*.log

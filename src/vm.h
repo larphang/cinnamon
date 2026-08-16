@@ -1,4 +1,5 @@
-#pragma once
+#ifndef _BS_VM_H_
+#define _BS_VM_H_
 
 #include "common.h"
 #include <stdint.h>
@@ -9,6 +10,7 @@
 #include "utils.h"
 #include "profiler.h"
 #include "int_int_hashmap.h"
+#include "string_builder.h"
 
 // ===[ Instance Types (signed 16-bit) ]===
 #define INSTANCE_SELF      (-1)
@@ -20,12 +22,16 @@
 #define INSTANCE_LOCAL     (-7)
 #define INSTANCE_STACKTOP  (-9)
 #define INSTANCE_ARG       (-15)
+#define INSTANCE_STATIC    (-16)
 
 // ===[ Variable Types (upper 5 bits of varRef, extracted with (varRef >> 24) & 0xF8) ]===
 #define VARTYPE_ARRAY     0x00
 #define VARTYPE_STACKTOP  0x80
 #define VARTYPE_NORMAL    0xA0
 #define VARTYPE_INSTANCE  0xE0
+
+// ===[ Variable Identities ]===
+#define VARIABLE_BUILTIN (-6)
 
 // ===[ Room Constants ]===
 #define ROOM_RESTARTGAME (-200) // The reason why it is -200 is because the GameMaker-HTML5 runner uses -200 too (see Globals.js)
@@ -43,7 +49,10 @@
 #endif
 
 // GMS 1.4 supports up to 16 arguments per script call
+// Newer GM versions do NOT have an argument limit however, but the limit is still used for the old classic style "argumentX" access
 #define GML_MAX_ARGUMENTS 16
+
+#define INSTANCE_ID_BASE 100000
 
 // ===[ Comparison Kinds ]===
 #define CMP_LT  1
@@ -88,7 +97,7 @@
 #define OP_CALL     0xD9
 #define OP_BREAK    0xFF
 
-// ===[ Extended BREAK Sub-Opcodes (bytecode version 17+) ]===
+// ===[ Extended BREAK Sub-Opcodes (WAD version 17+) ]===
 // Encoded in bits 0-15 of the BREAK instruction (instrInstanceType field, as int16_t)
 #define BREAK_CHKINDEX     (-1)  // Validate array index bounds
 #define BREAK_PUSHAF       (-2)  // Pop array ref + index, push element (final dimension)
@@ -99,6 +108,11 @@
 #define BREAK_SETSTATIC    (-7)  // Mark current function's static as initialized
 #define BREAK_SAVEAREF     (-8)  // Save top-of-stack array ref for compound assignment
 #define BREAK_RESTOREAREF  (-9)  // Push previously saved array ref
+#define BREAK_ISNULLISH    (-10) // Pop value, push bool: is the value nullish (undefined / pointer_null)?
+#define BREAK_PUSHREF      (-11) // Push an asset reference (or a script/function reference) encoded in the 32-bit operand
+
+// Max amount of args a function call can have until the args are heap-alloced.
+#define VM_MAX_STACK_ARGS 16
 
 // ===[ Variable Types for V17 Array Access ]===
 #define VARTYPE_ARRAYPUSHAF 0x10  // Push array reference (read context)
@@ -137,8 +151,16 @@ typedef struct EnvFrame {
     struct EnvFrame* parent;
 } EnvFrame;
 
+typedef struct {
+    int32_t jumpToOnException;
+    int32_t jumpToOnSuccess;
+    int32_t boundToCallDepth;
+    int32_t stackTop;
+} ExceptionHandlerFrame;
+
 // ===[ VMStack - Upward-growing array of RValue slots ]===
 #define VM_STACK_SIZE 1024
+#define VM_EXCEPTION_HANDLER_FRAME_STACK_SIZE 16
 
 typedef struct {
     int32_t top;
@@ -147,28 +169,41 @@ typedef struct {
 
 // Forward declarations
 struct Runner;
+#ifndef VM_CONTEXT_DEFINED
+#define VM_CONTEXT_DEFINED
 typedef struct VMContext VMContext;
+#endif
 
 // ===[ Builtin Functions Manager ]===
+#ifndef BUILTINFUNC_DEFINED
+#define BUILTINFUNC_DEFINED
 typedef RValue (*BuiltinFunc)(VMContext* ctx, RValue* args, int32_t argCount);
+#endif
 
 typedef struct {
     char* key;
     BuiltinFunc value;
 } BuiltinEntry;
 
+typedef struct {
+    char* message;
+} VMException;
+
+typedef struct { char* key; int32_t value; } CodeIndexByNameEntry;
+typedef struct { char* key; CodeLocals* value; } CodeLocalsMapEntry;
+typedef struct { int32_t key; int32_t* value; } CrossRefMapEntry;
+
 // ===[ VMContext - Holds all VM state ]===
 // Fields are ordered by access frequency so that the hottest data sits in the first bytes of the struct
 // This way data can be kept "hot" in the CPU cache or, depending on the platform, in scratchpad RAM
-typedef struct VMContext {
+struct VMContext {
     // Hot: touched every instruction in the dispatch loop
     uint8_t* bytecodeBase;
     uint32_t ip;
     uint32_t codeEnd;
     RValue* localVars;
     uint32_t localVarCount;
-    RValue* globalVars;
-    uint32_t globalVarCount;
+    struct Instance* globalScopeInstance; // used when GLOB scripts are being executed, and used for the "global" reference
     struct Instance* currentInstance;
     struct Instance* otherInstance; // "other" instance for collision events
     DataWin* dataWin;
@@ -200,35 +235,37 @@ typedef struct VMContext {
 
     // V17+ extended BREAK opcode state
     bool* staticInitialized; // Per-code-entry flag for isstaticok/setstatic (allocated in VM_create)
+    // Static variables: per-constructor shared static struct.
+    Instance** staticStructs;
     // BC17+: owner token set by BREAK_SETOWNER. Arrays whose .owner mismatches fork on write.
     void* currentArrayOwner;
     // SAVEAREF/RESTOREAREF balance tracker.
     int32_t savearefBalance;
+#ifdef ENABLE_WAD17
+    VMException* exception;
+    VMException* parkedException;
+    int32_t exceptionHandlerStackTop;
+    ExceptionHandlerFrame exceptionHandlerFrameStack[VM_EXCEPTION_HANDLER_FRAME_STACK_SIZE];
+#endif
 
     // Cold: init-only or rare lookups
     BuiltinEntry* builtinMap;
     bool registeredBuiltinFunctions;
     // funcName -> codeIndex hash map (stb_ds)
-    struct { char* key; int32_t value; }* codeIndexByName;
+    CodeIndexByNameEntry* codeIndexByName;
     // codeName -> CodeLocals* hash map (stb_ds)
-    struct { char* key; CodeLocals* value; }* codeLocalsMap;
-    // BC17+: A map of CODE indexes -> localVars slot lookup map
+    CodeLocalsMapEntry* codeLocalsMap;
+    // BC13/BC14/BC17+: A map of CODE indexes -> localVars slot lookup map
     IntIntHashMap* codeLocalsSlotMaps;
-    // varName -> varID hash map for global variables (stb_ds)
-    struct { char* key; int32_t value; }* globalVarNameMap;
     // varName -> varID hash map for self/instance-scoped variables (stb_ds).
-    struct { char* key; int32_t value; }* selfVarNameMap;
-    // codeName -> BuiltinFunc: native overrides for specific GML code entries.
-    // When VM_executeCode finds the executing code's name in this map it calls
-    // the native function directly and skips the bytecode interpreter entirely.
-    // Registered via VM_registerCodeOverride. nullptr until first registration.
-    struct { char* key; BuiltinFunc value; }* codeOverrideMap;
+    struct { char* key; int32_t value; }* varNameMap;
+    int32_t nextDynamicVarID;
     // "codeName\tfuncName" -> true, for deduplicating unknown function warnings
     StringBooleanEntry* loggedUnknownFuncs;
     // "codeName\tfuncName" -> true, for deduplicating stubbed function warnings
     StringBooleanEntry* loggedStubbedFuncs;
     // Cross-reference map for disassembler: targetCodeIndex -> stb_ds array of callerCodeIndex
-    struct { int32_t key; int32_t* value; }* crossRefMap;
+    CrossRefMapEntry* crossRefMap;
     bool alwaysLogUnknownFunctions;
     bool alwaysLogStubbedFunctions;
 #ifdef ENABLE_VM_TRACING
@@ -238,6 +275,7 @@ typedef struct VMContext {
     StringBooleanEntry* alarmsToBeTraced;
     StringBooleanEntry* instanceLifecyclesToBeTraced;
     StringBooleanEntry* eventsToBeTraced;
+    StringBooleanEntry* collisionsToBeTraced;
     StringBooleanEntry* opcodesToBeTraced;
     StringBooleanEntry* stackToBeTraced;
     StringBooleanEntry* tilesToBeTraced;
@@ -261,15 +299,17 @@ typedef struct VMContext {
 
     // Stack at the end because it is a big chunky boi (we don't want it pushing fields around)
     VMStack stack;
-} VMContext;
+};
 
 // ===[ Public API ]===
+Instance* VM_findInstanceByTarget(VMContext* ctx, int32_t target);
 VMContext* VM_create(DataWin* dataWin);
 void VM_reset(VMContext* ctx);
 RValue VM_executeCode(VMContext* ctx, int32_t codeIndex);
 RValue VM_callCodeIndex(VMContext* ctx, int32_t codeIndex, RValue* args, int32_t argCount);
 void VM_free(VMContext* ctx);
 bool VM_isObjectOrDescendant(DataWin* dataWin, int32_t objectIndex, int32_t targetObjectIndex);
+int32_t VM_resolveInstanceTarget(VMContext* ctx, int32_t target);
 void VM_buildCrossReferences(VMContext* ctx);
 void VM_disassemble(VMContext* ctx, int32_t codeIndex);
 #ifdef ENABLE_VM_OPCODE_PROFILER
@@ -278,18 +318,106 @@ void VM_printOpcodeProfilerReport(const VMContext* ctx);
 #endif
 void VM_registerCodeOverride(VMContext* ctx, const char* codeName, BuiltinFunc func);
 void VM_registerBuiltin(VMContext* ctx, const char* name, BuiltinFunc func);
+#if defined(_MSC_VER) && !defined(__clang__)
+// Some versions of MSVC complain that the functions aren't the right type because of struct bullshit.
+// We guard this behind _MSC_VER to keep type checking on other compilers to find legitimate type mismatch errors.
+#define VM_registerBuiltin(ctx,name,func) VM_registerBuiltin(ctx,name,(BuiltinFunc)func)
+#endif
 BuiltinFunc VM_findBuiltin(VMContext* ctx, const char* name);
-RValue VM_createArray(VMContext* ctx);
-void VM_arraySet(VMContext* ctx, RValue* arrayRef, int32_t index, RValue val);
 
-static const char* VM_getCallerName(VMContext* ctx) {
+char* VM_getVariableNameByVarId(VMContext* ctx, int32_t varId);
+RValue VM_structGetVariableByVarId(Instance* structInst, int32_t varId, int32_t arrayIndex);
+RValue VM_structGetVariableByVarName(VMContext* ctx, Instance* structInst, const char* name, int32_t arrayIndex);
+// Set a named field on a freshly-built GML struct.
+void VM_structSet(VMContext* ctx, Instance* structInst, const char* name, RValue val, int32_t arrayIndex);
+void VM_structSetAndFreeVal(VMContext* ctx, Instance* structInst, const char* name, RValue val, int32_t arrayIndex);
+
+// @@CopyStatic@@: chain the current constructor's static struct to a parent constructor's static struct (static inheritance).
+void VM_copyStatic(VMContext* ctx, RValue* parentRef);
+
+// Look up the varID for a self-scoped variable name, allocating a fresh synthetic ID if absent.
+int32_t VM_getOrAllocateVarID(VMContext* ctx, const char* name);
+
+// Writes to the VMContext's scriptArgs, resizing the underlying array if needed
+// The "val" will be RValue_makeIndependent(val), it won't be freed
+void VM_writeToScriptArgs(VMContext* ctx, int32_t writeIndex, RValue val);
+
+static inline const char* VM_getCallerName(VMContext* ctx) {
     return ctx->currentCodeName != nullptr ? ctx->currentCodeName : "<unknown>";
 }
 
-static char* VM_createDedupKey(const char* callerName, const char* funcName) {
+static inline char* VM_createDedupKey(const char* callerName, const char* funcName) {
     // Build dedup key: "callerName\tfuncName"
     size_t keyLen = strlen(callerName) + 1 + strlen(funcName) + 1;
-    char* dedupKey = safeMalloc(keyLen);
+    char* dedupKey = (char *)safeMalloc(keyLen);
     snprintf(dedupKey, keyLen, "%s\t%s", callerName, funcName);
     return dedupKey;
 }
+
+// ===[ Trace Helpers ]===
+
+#ifdef ENABLE_VM_TRACING
+/**
+ * @brief Checks if a variable access should be traced.
+ *
+ * Matches the trace map entries in order: wildcard "*", bare scope name (e.g. "obj_player" or "global"),
+ * alternate scope name (e.g. "self" for any instance), or qualified "scope.var" format
+ * (e.g. "obj_player.x", "global.hp", "self.x"). Short-circuits before formatting
+ * the qualified name when possible.
+ *
+ * @param traceMap The string-boolean hash map of trace filters (from --trace-variable-reads/writes).
+ * @param scopeName The scope of the variable: an object name (e.g. "obj_player") or "global".
+ * @param altScopeName An alternate scope name to also match (e.g. "self" for instance variables), or nullptr.
+ * @param varName The variable name being accessed (e.g. "x").
+ * @return true if the access matches a trace filter and should be logged.
+ */
+static inline bool VM_shouldTraceVariable(StringBooleanEntry* traceMap, const char* scopeName, const char* altScopeName, const char* varName) {
+    if (shlen(traceMap) == 0) return false;
+    // "*" should trace EVERYTHING
+    if (shgeti(traceMap, "*") != -1) return true;
+    // "obj_mainchara" should trace EVERY variable read/write to that object
+    if (shgeti(traceMap, scopeName) != -1) return true;
+    // "self" should trace EVERY "self" scope variable read/write to ALL objects
+    if (altScopeName != nullptr && shgeti(traceMap, altScopeName) != -1) return true;
+    // "hp" should trace EVERY "hp" variable read/write to ALL objects
+    if (shgeti(traceMap, varName) != -1) return true;
+    // "obj_mainchara.hp" should trace EVERY variable read/write to the "hp" variable on the "obj_mainchara" object.
+    size_t formattedSize = strlen(scopeName) + 1 + strlen(varName) + 1;
+    char *formatted = (char *)safeMalloc(formattedSize);
+    snprintf(formatted, formattedSize, "%s.%s", scopeName, varName);
+    if (shgeti(traceMap, formatted) != -1) {
+        free(formatted);
+        return true;
+    }
+    free(formatted);
+    if (altScopeName != nullptr) {
+        size_t altFormattedSize = strlen(altScopeName) + 1 + strlen(varName) + 1;
+        char *altFormatted = (char *)safeMalloc(altFormattedSize);
+        snprintf(altFormatted, altFormattedSize, "%s.%s", altScopeName, varName);
+        if (shgeti(traceMap, altFormatted) != -1) {
+            free(altFormatted);
+            return true;
+        }
+        free(altFormatted);
+    }
+    return false;
+}
+
+static inline void VM_checkIfVariableShouldBeTracedAndLog(VMContext* ctx, const char* scopeName, const char* altScopeName, const char* name, RValue value, bool isWrite, int32_t arrayIndex, int32_t instanceId, const char* additional) {
+    StringBooleanEntry* varModificationsToBeTraced = isWrite ? ctx->varWritesToBeTraced : ctx->varReadsToBeTraced;
+    if (!VM_shouldTraceVariable(varModificationsToBeTraced, scopeName, altScopeName, name))
+        return;
+
+    char* rvalueAsString = RValue_toStringTyped(value);
+    const char* verb = isWrite ? "WRITE" : "READ";
+    const char* arrow = isWrite ? "=" : "->";
+    char indexBuf[16] = "";
+    if (arrayIndex >= 0) snprintf(indexBuf, sizeof(indexBuf), "[%d]", arrayIndex);
+    char instanceIdBuf[28] = "";
+    if (instanceId >= 0) snprintf(instanceIdBuf, sizeof(instanceIdBuf), " (instanceId=%d)", instanceId);
+    logInfo("VM: [%s] %s %s.%s%s %s %s%s%s\n", ctx->currentCodeName, verb, scopeName, name, indexBuf, arrow, rvalueAsString, instanceIdBuf, additional);
+    free(rvalueAsString);
+}
+#endif
+
+#endif /* _BS_VM_H_ */

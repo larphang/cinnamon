@@ -1,10 +1,11 @@
-#pragma once
+#ifndef _BS_TEXT_UTILS_H_
+#define _BS_TEXT_UTILS_H_
 
 #include "common.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include <string.h>
+#include "string_compat.h"
 #include "data_win.h"
 #include "runner.h"
 #include "utils.h"
@@ -283,10 +284,12 @@ static inline PreprocessedText TextUtils_preprocessGmlDrawText(const char* text,
 // Preprocesses GML text: converts unescaped # to \n, and \# to literal #.
 // Uses a fused single-pass approach: scans for # and only allocates if one is found.
 static inline PreprocessedText TextUtils_preprocessGmlText(const char* text) {
+    PreprocessedText ret = {0};
     int32_t len = (int32_t) strlen(text);
     for (int32_t i = 0; len > i; i++) {
         if (text[i] == '#') {
-            char* result = safeMalloc(len + 1);
+            // Found one - allocate and process from here
+            char* result = (char *)safeMalloc(len + 1);
             memcpy(result, text, i);
             int32_t out = i;
 
@@ -308,18 +311,27 @@ static inline PreprocessedText TextUtils_preprocessGmlText(const char* text) {
                 }
             }
             result[out] = '\0';
-            return (PreprocessedText){ .text = result, .owning = true };
+            ret.text = result;
+            ret.owning = true;
+            return ret;
         }
     }
 
     // No # found, return original pointer without allocating
-    return (PreprocessedText){ .text = text, .owning = false };
+    ret.text = text;
+    ret.owning = false;
+    return ret;
 }
 
 // Preprocess GML text ONLY if the runner is not GameMaker: Studio 2
 static inline PreprocessedText TextUtils_preprocessGmlTextIfNeeded(Runner* runner, const char* text) {
-    bool convertHashNewlines = !DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0);
-    return TextUtils_preprocessGmlDrawText(text, convertHashNewlines);
+    if (DataWin_isVersionAtLeast(runner->dataWin, 2, 0, 0, 0)) {
+        PreprocessedText ret = {0};
+        ret.text = text;
+        ret.owning = false;
+        return ret;
+    }
+    return TextUtils_preprocessGmlText(text);
 }
 
 // Returns true if c is \r or \n
@@ -355,7 +367,140 @@ static inline int32_t TextUtils_skipNewline(const char* text, int32_t lineEnd, i
     return next;
 }
 
-static char* TextUtils_trimTrailingWhitespace(char* str) {
+// Port of yyFontManager.prototype.Split_TextBlock from GameMaker-HTML5 to C.
+// Pass "0 > maxWidth" to disable wrapping (returns the original pointer non-owning).
+static inline PreprocessedText TextUtils_wrapText(Font* font, const char* text, int32_t maxWidth) {
+    PreprocessedText ret = {0};
+    int32_t len = 0;
+    if (text != nullptr)
+        len = (int32_t) strlen(text);
+
+    if (0 == len) {
+        ret.text = text;
+        ret.owning = false;
+        return ret;
+    }
+
+    int32_t linewidth = (0 > maxWidth) ? 10000000 : maxWidth; // means nothing will "wrap"
+
+    // Worst case: each byte becomes itself plus a '\n' separator.
+    char* out = (char *)safeMalloc((size_t) len * 2 + 1);
+    int32_t outLen = 0;
+    bool wroteAny = false;
+
+    ret.text = out;
+    ret.owning = true;
+
+    // put newlines in
+    const char* pNew = text;
+    char lastChar = pNew[0];
+    int32_t start = 0;
+    int32_t end = 0;
+
+    while (len > start) {
+        float total = 0.0f;
+
+        // If width < 0 (i.e. no wrapping required), then we DON'T strip spaces from the start... we just copy it!  (sounds wrong.. but its what they do...)
+        if (linewidth == 10000000) {
+            while (len > end && pNew[end] != '\n' && pNew[end] != '\r') {
+                end++;
+                if (len > end) lastChar = pNew[end];
+                else lastChar = '\0';
+            }
+            char endByte = (len > end) ? pNew[end] : '\0';
+
+            if (lastChar == '\n' && endByte == '\r') { end++; continue; } // ignore, we've already split the line on #10
+            if (lastChar == '\r' && endByte == '\n') { end++; continue; } // ignore, we've already split the line on #13
+
+            lastChar = endByte;
+
+            // add into our list...
+            if (wroteAny) out[outLen++] = '\n';
+            memcpy(out + outLen, pNew + start, (size_t) (end - start));
+            outLen += end - start;
+            wroteAny = true;
+        } else {
+            // Skip leading whitespace
+            while (len > end && (float) linewidth > total) {
+                if (pNew[end] != ' ') break;
+                FontGlyph* spGlyph = TextUtils_findGlyph(font, (uint16_t) ' ');
+                total += (spGlyph != nullptr) ? (float) spGlyph->shift : 0.0f;
+                end++;
+            }
+
+            // Loop through string and get the number of chars that will fit in the line.
+            while (len > end && (float) linewidth > total) {
+                if (pNew[end] == '\n') break; // if we hit a newline, then "break" here...
+                int32_t tentative = end;
+                uint16_t cp = TextUtils_decodeUtf8(pNew, len, &tentative); // advance `end` by one codepoint
+                FontGlyph* glyph = TextUtils_findGlyph(font, cp);
+                float size = (glyph != nullptr) ? (float) glyph->shift : 0.0f; // width of character
+                float newTotal = total + size;
+                // Won't fit, bail out!
+                if (newTotal > (float) linewidth) break;
+                // It fits :3
+                total = newTotal;
+                end = tentative;
+            }
+
+            // END of line
+            if (len > end && pNew[end] == '\n') {
+                if (wroteAny) out[outLen++] = '\n';
+                memcpy(out + outLen, pNew + start, (size_t) (end - start));
+                outLen += end - start;
+                wroteAny = true;
+            } else {
+                // NOT a new line, but we didn't move on... fatal error. Probably a single char doesn't even fit!
+                if (end == start) {
+                    out[outLen] = '\0';
+                    return ret;
+                }
+
+                // If we don't END on a "space", OR if the next character isn't a space AS WELL.
+                // then backtrack to the start of the last "word"
+                if (end != len) {
+                    // This replaces the "if ((pNew[end] != whitespace) || (pNew[end] != whitespace && pNew[end + 1] != whitespace))" check
+                    bool nextNotSpace = (end + 1 >= len) || (pNew[end + 1] != ' ');
+                    if ((pNew[end] != ' ') || (pNew[end] != ' ' && nextNotSpace)) {
+                        int32_t e = end;
+                        while (e > start) {
+                            e--;
+                            if (pNew[e] == ' ') break; // FOUND start of word
+                        }
+
+                        if (e != start) {
+                            end = e;
+                        } else {
+                            // This is where we diverge from the GameMaker-HTML5 behavior to match how the original runner works
+                            // The GameMaker-HTML5 runner does NOT wrap if it doesn't fit AND none of the characters are space, and we WANT that
+                        }
+                    }
+                }
+                int32_t _end = end;
+                if (_end > start) {
+                    while (_end > 0 && pNew[_end - 1] == ' ') _end--;
+                }
+                //  else if (end == start) // if we're back to the START of the string... look for the next space - or string end.
+                //  {
+                //      while (pNew[end] != whitespace && end < len)
+                //          end++;
+                //  }
+
+                if (_end != start) {
+                    if (wroteAny) out[outLen++] = '\n';
+                    memcpy(out + outLen, pNew + start, (size_t) (_end - start));
+                    outLen += _end - start;
+                    wroteAny = true;
+                }
+            }
+        }
+        start = ++end;
+    }
+    out[outLen] = '\0';
+    return ret;
+}
+
+static inline char* TextUtils_trimTrailingWhitespace(char* str) {
     size_t len = strlen(str);
     while (len > 0 && (TextUtils_isWhitespaceChar(str[len - 1]) || TextUtils_isNewlineChar(str[len - 1]))) {
         len--;
@@ -363,3 +508,5 @@ static char* TextUtils_trimTrailingWhitespace(char* str) {
     str[len] = '\0';
     return str;
 }
+
+#endif /* _BS_TEXT_UTILS_H_ */

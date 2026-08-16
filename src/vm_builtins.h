@@ -1,4 +1,5 @@
-#pragma once
+#ifndef _BS_VM_BUILTINS_H_
+#define _BS_VM_BUILTINS_H_
 
 #include "common.h"
 #include "vm.h"
@@ -22,6 +23,7 @@ typedef enum {
     BUILTIN_VAR_IMAGE_ALPHA,
     BUILTIN_VAR_IMAGE_BLEND,
     BUILTIN_VAR_IMAGE_NUMBER,
+    BUILTIN_VAR_IMAGE_SINGLE,
     BUILTIN_VAR_SPRITE_INDEX,
     BUILTIN_VAR_SPRITE_WIDTH,
     BUILTIN_VAR_SPRITE_HEIGHT,
@@ -31,6 +33,8 @@ typedef enum {
     BUILTIN_VAR_BBOX_RIGHT,
     BUILTIN_VAR_BBOX_TOP,
     BUILTIN_VAR_BBOX_BOTTOM,
+    BUILTIN_VAR_BROWSER_WIDTH,
+    BUILTIN_VAR_BROWSER_HEIGHT,
     BUILTIN_VAR_VISIBLE,
     BUILTIN_VAR_DEPTH,
     BUILTIN_VAR_PERSISTENT,
@@ -57,9 +61,17 @@ typedef enum {
     BUILTIN_VAR_PATH_ORIENTATION,
     BUILTIN_VAR_PATH_ENDACTION,
 
+    // Timeline instance variables
+    BUILTIN_VAR_TIMELINE_INDEX,
+    BUILTIN_VAR_TIMELINE_POSITION,
+    BUILTIN_VAR_TIMELINE_SPEED,
+    BUILTIN_VAR_TIMELINE_RUNNING,
+    BUILTIN_VAR_TIMELINE_LOOP,
+
     // Room properties
     BUILTIN_VAR_ROOM,
     BUILTIN_VAR_ROOM_FIRST,
+    BUILTIN_VAR_ROOM_LAST,
     BUILTIN_VAR_ROOM_SPEED,
     BUILTIN_VAR_ROOM_WIDTH,
     BUILTIN_VAR_ROOM_HEIGHT,
@@ -67,6 +79,8 @@ typedef enum {
 
     // View properties
     BUILTIN_VAR_VIEW_CURRENT,
+    BUILTIN_VAR_VIEW_ENABLED,
+    BUILTIN_VAR_CAMERA_VIEW,
     BUILTIN_VAR_VIEW_XVIEW,
     BUILTIN_VAR_VIEW_YVIEW,
     BUILTIN_VAR_VIEW_WVIEW,
@@ -83,12 +97,15 @@ typedef enum {
     BUILTIN_VAR_VIEW_OBJECT,
     BUILTIN_VAR_VIEW_HSPEED,
     BUILTIN_VAR_VIEW_VSPEED,
+    BUILTIN_VAR_VIEW_SURFACE_ID,
 
     // Background properties
     BUILTIN_VAR_BACKGROUND_VISIBLE,
     BUILTIN_VAR_BACKGROUND_INDEX,
     BUILTIN_VAR_BACKGROUND_X,
     BUILTIN_VAR_BACKGROUND_Y,
+    BUILTIN_VAR_BACKGROUND_XSCALE,
+    BUILTIN_VAR_BACKGROUND_YSCALE,
     BUILTIN_VAR_BACKGROUND_HSPEED,
     BUILTIN_VAR_BACKGROUND_VSPEED,
     BUILTIN_VAR_BACKGROUND_WIDTH,
@@ -133,7 +150,14 @@ typedef enum {
     BUILTIN_VAR_OS_LLVM_WINPHONE,
 
     // Timing
+    BUILTIN_VAR_CURRENT_DAY,
+    BUILTIN_VAR_CURRENT_HOUR,
+    BUILTIN_VAR_CURRENT_MINUTE,
+    BUILTIN_VAR_CURRENT_MONTH,
+    BUILTIN_VAR_CURRENT_SECOND,
     BUILTIN_VAR_CURRENT_TIME,
+    BUILTIN_VAR_CURRENT_WEEKDAY,
+    BUILTIN_VAR_CURRENT_YEAR,
 
     // File system
     BUILTIN_VAR_WORKING_DIRECTORY,
@@ -162,6 +186,13 @@ typedef enum {
     BUILTIN_VAR_KEYBOARD_KEY,
     BUILTIN_VAR_KEYBOARD_LASTCHAR,
     BUILTIN_VAR_KEYBOARD_LASTKEY,
+    BUILTIN_VAR_KEYBOARD_STRING,
+
+    // Mouse
+    BUILTIN_VAR_MOUSE_X,
+    BUILTIN_VAR_MOUSE_Y,
+    BUILTIN_VAR_MOUSE_BUTTON,
+    BUILTIN_VAR_MOUSE_LASTBUTTON,
 
     // Surfaces
     BUILTIN_VAR_APPLICATION_SURFACE,
@@ -169,6 +200,7 @@ typedef enum {
     // Constants
     BUILTIN_VAR_TRUE,
     BUILTIN_VAR_FALSE,
+    BUILTIN_VAR_INFINITY,
     BUILTIN_VAR_PI,
     BUILTIN_VAR_UNDEFINED,
 
@@ -205,8 +237,16 @@ typedef enum {
     BUILTIN_VAR_BUFFER_SEEK_END,
 
     // Other
+    BUILTIN_VAR_INSTANCE_COUNT,
+    BUILTIN_VAR_INSTANCE_ID,
     BUILTIN_VAR_FPS,
     BUILTIN_VAR_DEBUG_MODE,
+    BUILTIN_VAR_DELTA_TIME,
+
+    // Legacy GMS 1.x globals
+    BUILTIN_VAR_SCORE,
+    BUILTIN_VAR_LIVES,
+    BUILTIN_VAR_HEALTH,
 
     // Gamepad constants
     BUILTIN_VAR_GP_FACE1,
@@ -239,5 +279,7 @@ void VMBuiltins_registerAll(VMContext* ctx);
 int16_t VMBuiltins_resolveBuiltinVarId(const char* name);
 // Asserts at startup that the internal builtin-var lookup table is strictly sorted by strcmp order (required for bsearch) and has no duplicates.
 void VMBuiltins_checkIfBuiltinVarTableIsSorted(void);
-RValue VMBuiltins_getVariable(VMContext* ctx, int16_t builtinVarId, const char* name, int32_t arrayIndex);
-void VMBuiltins_setVariable(VMContext* ctx, int16_t builtinVarId, const char* name, RValue val, int32_t arrayIndex);
+RValue VMBuiltins_getVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId, const char* name, int32_t arrayIndex);
+void VMBuiltins_setVariable(VMContext* ctx, Instance* inst, int16_t builtinVarId, const char* name, RValue val, int32_t arrayIndex);
+
+#endif /* _BS_VM_BUILTINS_H_ */

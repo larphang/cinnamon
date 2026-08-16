@@ -1,11 +1,51 @@
 cmake_minimum_required(VERSION 3.21)
+
+if(PLATFORM STREQUAL "ps3")
+set(CMAKE_TOOLCHAIN_FILE ${CMAKE_SOURCE_DIR}/cmake/ppu.cmake)
+endif()
+
+if(PLATFORM STREQUAL "vita")
+
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  if(DEFINED ENV{VITASDK})
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VITASDK}/share/vita.toolchain.cmake" CACHE PATH "toolchain file")
+  else()
+    message(FATAL_ERROR "Please define VITASDK to point to your SDK path!")
+  endif()
+endif()
+
+endif()
+
 project(butterscotch C)
+
+if (PLATFORM STREQUAL "vita")
+include("${VITASDK}/share/vita.cmake" REQUIRED)
+set(VITA_APP_NAME "Butterscotch")
+set(VITA_TITLEID  "BUTTRSTCH")
+set(VITA_VERSION  "01.00")
+set(VITA_MKSFOEX_FLAGS "-d ATTRIBUTE2=12")
+endif()
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-add_compile_options(-Wall -Wextra)
+if(MSVC)
+    if(WERROR)
+        add_compile_options(/WX)
+    endif()
+else()
+    add_compile_options(-Wall -Wextra -Wvla)
+    if(WERROR)
+        add_compile_options(-Werror)
+    endif()
+endif()
 
-set(PLATFORM "" CACHE STRING "Platform backend")
+set(PLATFORM "desktop" CACHE STRING "Platform backend")
+set(DESKTOP_BACKEND "" CACHE STRING "Desktop platform backend")
+set(AUDIO_BACKEND "" CACHE STRING "Audio backend")
+
+if(PLATFORM STREQUAL "desktop" AND DESKTOP_BACKEND STREQUAL "")
+    message(FATAL_ERROR "You need to set a DESKTOP_BACKEND!")
+endif()
 
 # Build metadata
 set(BUTTERSCOTCH_COMMIT_HASH "unknown" CACHE STRING "Git commit hash")
@@ -15,28 +55,59 @@ add_compile_definitions(
     BUTTERSCOTCH_COMMIT_DATE="${BUTTERSCOTCH_COMMIT_DATE}"
 )
 
-if(PLATFORM STREQUAL "")
-    message(FATAL_ERROR "PLATFORM is not set! Use -DPLATFORM=glfw (or another supported platform).")
+# Audio backend defaults
+if(AUDIO_BACKEND STREQUAL "")
+    if(PLATFORM STREQUAL "web")
+        set(AUDIO_BACKEND "web")
+    elseif(PLATFORM STREQUAL "web-meta")
+        set(AUDIO_BACKEND "none")
+    elseif(PLATFORM STREQUAL "ps3")
+        set(AUDIO_BACKEND "openal")
+    elseif(PLATFORM STREQUAL "ps2")
+        set(AUDIO_BACKEND "ps2")
+    else()
+        set(AUDIO_BACKEND "miniaudio")
+    endif()
 endif()
 
-# To avoid unused code in production builds that are only used for a single game (example: PlayStation 2 target), we can enable/disable specific bytecode versions
+if(AUDIO_BACKEND STREQUAL "openal")
+    file(GLOB AUDIO_SOURCES src/audio/openal/*.c)
+elseif(AUDIO_BACKEND STREQUAL "miniaudio")
+    file(GLOB AUDIO_SOURCES src/audio/miniaudio/*.c)
+elseif(AUDIO_BACKEND STREQUAL "web")
+    file(GLOB AUDIO_SOURCES src/audio/web/*.c src/audio/miniaudio/*.c)
+elseif(AUDIO_BACKEND STREQUAL "ps2")
+    file(GLOB AUDIO_SOURCES src/audio/ps2/*.c)
+elseif(NOT AUDIO_BACKEND STREQUAL "none")
+    message(FATAL_ERROR "Invalid AUDIO_BACKEND!")
+endif()
+
+# To avoid unused code in production builds that are only used for a single game (example: PlayStation 2 target), we can enable/disable specific features
 #
-# If only a single bytecode version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
+# If only a single WAD version is enabled, the checks will be collapsed and removed by the compiler during build time, reducing code size and improving
 # performance on low end hardware!
-option(ENABLE_BC16 "Enable support for Bytecode Version 16" ON)
-option(ENABLE_BC17 "Enable support for Bytecode Version 17" ON)
-if(PLATFORM STREQUAL "n3ds")
-    set(ENABLE_BC16 ON CACHE BOOL "Enable support for Bytecode Version 16" FORCE)
-    set(ENABLE_BC17 OFF CACHE BOOL "Enable support for Bytecode Version 17" FORCE)
+option(ENABLE_WAD14 "Enable support for WAD Version 14 and below" ON)
+option(ENABLE_WAD16 "Enable support for WAD Version 15/16" ON)
+option(ENABLE_WAD17 "Enable support for WAD Version 17" ON)
+option(ENABLE_LEGACY_GL "Enable the legacy OpenGL renderer" ON)
+option(ENABLE_MODERN_GL "Enable the modern OpenGL renderer" ON)
+if(NOT ENABLE_WAD14 AND NOT ENABLE_WAD16 AND NOT ENABLE_WAD17)
+    message(FATAL_ERROR "You need to build Butterscotch with at least one WAD version enabled!")
 endif()
-if(NOT ENABLE_BC16 AND NOT ENABLE_BC17)
-    message(FATAL_ERROR "You need to build Butterscotch with at least one bytecode version enabled!")
+if(ENABLE_WAD14)
+    add_compile_definitions(ENABLE_WAD14)
 endif()
-if(ENABLE_BC16)
-    add_compile_definitions(ENABLE_BC16)
+if(ENABLE_WAD16)
+    add_compile_definitions(ENABLE_WAD16)
 endif()
-if(ENABLE_BC17)
-    add_compile_definitions(ENABLE_BC17)
+if(ENABLE_WAD17)
+    add_compile_definitions(ENABLE_WAD17)
+endif()
+if(ENABLE_LEGACY_GL)
+    add_compile_definitions(ENABLE_LEGACY_GL)
+endif()
+if(ENABLE_MODERN_GL)
+    add_compile_definitions(ENABLE_MODERN_GL)
 endif()
 
 set(BUTTERSCOTCH_WIIU_ICON "${CMAKE_SOURCE_DIR}/resources/wiiu/meta/icon.png")
@@ -60,28 +131,68 @@ if(WIIU_USE_DELTARUNE_SD_PATH)
     set(BUTTERSCOTCH_WIIU_APP_FOLDER "deltarune")
 endif()
 
-file(GLOB SOURCES src/*.c)
+if(PLATFORM STREQUAL "web-meta")
+    # Metadata-only build: just the data.win parser and its direct deps. No VM, no runner, no I/O subsystems.
+    set(SOURCES
+        src/data_win.c
+        src/binary_reader.c
+		src/log.c
+    )
+else()
+    file(GLOB SOURCES src/*.c)
+endif()
 # Platform specific files builds
 file(GLOB PLATFORM_SOURCES src/${PLATFORM}/*.c)
 
-# OpenGL ES 3.0 / WebGL2 compatibility
-option(ENABLE_GLES "Build the gl_renderer against OpenGL ES 3.0 / WebGL2 instead of desktop GL 4.1 Core" OFF)
-if(PLATFORM STREQUAL "glfw" AND ENABLE_GLES)
-    list(REMOVE_ITEM PLATFORM_SOURCES ${CMAKE_SOURCE_DIR}/src/glfw/gl_legacy_renderer.c)
+if(PLATFORM STREQUAL "android")
+    add_library(butterscotch SHARED ${SOURCES} ${PLATFORM_SOURCES} ${AUDIO_SOURCES})
+else()
+    add_executable(butterscotch ${SOURCES} ${PLATFORM_SOURCES} ${AUDIO_SOURCES})
 endif()
 
-add_executable(butterscotch ${SOURCES} ${PLATFORM_SOURCES})
 target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+if(AUDIO_BACKEND STREQUAL "openal")
+    target_include_directories(butterscotch PUBLIC src/audio/openal)
+    add_compile_definitions(USE_OPENAL)
+    if(APPLE)
+        set(AUDIO_LIBRARIES "-framework OpenAL")
+    elseif(NOT PLATFORM STREQUAL "ps3" AND NOT PLATFORM STREQUAL "vita")
+        find_package(OpenAL REQUIRED)
+        target_include_directories(butterscotch PUBLIC "${OPENAL_INCLUDE_DIR}")
+        set(AUDIO_LIBRARIES "${OPENAL_LIBRARY}")
+    endif()
+elseif(AUDIO_BACKEND STREQUAL "miniaudio")
+    target_include_directories(butterscotch SYSTEM PUBLIC vendor/miniaudio)
+    target_include_directories(butterscotch PUBLIC src/audio/miniaudio)
+    add_compile_definitions(USE_MINIAUDIO)
+    if (NOT WIN32)
+        set(AUDIO_LIBRARIES pthread)
+    endif()
+elseif(AUDIO_BACKEND STREQUAL "web")
+    target_include_directories(butterscotch SYSTEM PUBLIC vendor/miniaudio)
+    target_include_directories(butterscotch PUBLIC src/audio/web)
+    target_include_directories(butterscotch PUBLIC src/audio/miniaudio)
+    add_compile_definitions(USE_WEB_AUDIO)
+elseif(AUDIO_BACKEND STREQUAL "ps2")
+    target_include_directories(butterscotch PUBLIC src/audio/ps2)
+    add_compile_definitions(USE_PS2_AUDIO)
+endif()
 
 # stb_ds
 target_include_directories(butterscotch PUBLIC vendor/stb/ds)
 
 if(PLATFORM STREQUAL "glfw")
     file(GLOB GL_SOURCES src/gl/*.c)
-    list(REMOVE_ITEM GL_SOURCES ${CMAKE_SOURCE_DIR}/src/gl/gl_renderer.c)
     target_sources(butterscotch PRIVATE ${GL_SOURCES})
     target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl)
-    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/vendor)
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl_common)
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/image)
+    if (MSVC)
+        target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/compat/getopt)
+        add_compile_definitions(NO_STRTOK_R)
+        add_compile_definitions(NO_STRCASECMP)
+    endif()
 
     # Butterscotch VM/interpreter profiler
     option(ENABLE_VM_GML_PROFILER "Enable Butterscotch VM/interpreter profiler" ON)
@@ -101,12 +212,6 @@ if(PLATFORM STREQUAL "glfw")
         add_compile_definitions(ENABLE_VM_OPCODE_PROFILER)
     endif()
 
-    # Spatial grid logs
-    option(ENABLE_SPATIAL_GRID_LOGS "Enable Spatial Grid logs" OFF)
-    if(ENABLE_SPATIAL_GRID_LOGS)
-        add_compile_definitions(ENABLE_SPATIAL_GRID_LOGS)
-    endif()
-
     # VM unknown/stubbed function logs
     option(ENABLE_VM_STUB_LOGS "Enable VM unknown/stubbed function logs" ON)
     if(ENABLE_VM_STUB_LOGS)
@@ -114,45 +219,84 @@ if(PLATFORM STREQUAL "glfw")
     endif()
 
     # GLAD
-    if(ENABLE_GLES)
-        add_compile_definitions(ENABLE_GLES)
-        add_library(glad STATIC vendor/glad-gles/src/glad.c)
-        target_include_directories(glad PUBLIC vendor/glad-gles/include)
-    else()
-        add_library(glad STATIC vendor/glad/src/glad.c)
-        target_include_directories(glad PUBLIC vendor/glad/include)
-    endif()
+    add_library(glad STATIC vendor/glad/src/glad.c)
+    target_include_directories(glad PUBLIC vendor/glad/include)
 
     # stb_image
     target_include_directories(butterscotch PUBLIC vendor/stb/image)
 
-    # stb_vorbis
-    target_include_directories(butterscotch PUBLIC vendor/stb/vorbis)
-
-    # miniaudio
-    target_include_directories(butterscotch PUBLIC vendor/miniaudio)
-
-    if(MINGW)
-        find_package(glfw3 REQUIRED)
-        set(GLFW3_LIBRARIES glfw3)
-
-        # Target Windows 7+ (avoids referencing newer APIs like MapViewOfFileNuma2 that MinGW import libs don't provide)
-        # https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/include/sdkddkver.h
-        target_compile_definitions(butterscotch PRIVATE _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000 WIN32_LEAN_AND_MEAN)
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m opengl32 gdi32 winmm bz2)
-        target_link_options(butterscotch PRIVATE -static)
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Haiku")
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(GLFW3 REQUIRED glfw3)
-        target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
-        target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m pthread bz2)
+    set(PLATFORM_LIBRARIES glad bzip2 stb_ds sha1 stb_vorbis)
+    if(NOT MSVC)
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} m)
+    endif()
+    if(WIN32)
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} opengl32 gdi32 winmm)
     else()
+        set(PLATFORM_LIBRARIES ${PLATFORM_LIBRARIES} ${CMAKE_DL_LIBS})
+    endif()
+
+    if(DESKTOP_BACKEND STREQUAL "glfw3")
+        add_compile_definitions(USE_GLFW3)
+
+        if(MINGW)
+            find_package(glfw3 REQUIRED)
+
+            # Target Windows 7+ (avoids referencing newer APIs like MapViewOfFileNuma2 that MinGW import libs don't provide)
+            # https://github.com/mirror/mingw-w64/blob/master/mingw-w64-headers/include/sdkddkver.h
+            target_compile_definitions(butterscotch PRIVATE _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000 WIN32_LEAN_AND_MEAN)
+            target_link_options(butterscotch PRIVATE -static)
+            set(BACKEND_LIBRARIES glfw3 opengl32 gdi32 winmm)
+        elseif(MSVC)
+            target_compile_definitions(butterscotch PRIVATE WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+            find_package(glfw3 CONFIG REQUIRED)
+            set(BACKEND_LIBRARIES glfw opengl32 gdi32 winmm)
+        else()
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(GLFW3 REQUIRED glfw3)
+            target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
+            target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
+            set(BACKEND_LIBRARIES ${GLFW3_LIBRARIES})
+        endif()
+    elseif(DESKTOP_BACKEND STREQUAL "glfw2")
+        add_compile_definitions(USE_GLFW2)
+
         find_package(PkgConfig REQUIRED)
-        pkg_check_modules(GLFW3 REQUIRED glfw3)
-        target_include_directories(butterscotch PRIVATE ${GLFW3_INCLUDE_DIRS})
-        target_link_directories(butterscotch PRIVATE ${GLFW3_LIBRARY_DIRS})
-        target_link_libraries(butterscotch ${GLFW3_LIBRARIES} glad m pthread dl bz2)
+        pkg_check_modules(GLFW2 REQUIRED libglfw)
+        target_include_directories(butterscotch PRIVATE ${GLFW2_INCLUDE_DIRS})
+        target_link_directories(butterscotch PRIVATE ${GLFW2_LIBRARY_DIRS})
+        set(BACKEND_LIBRARIES ${GLFW2_LIBRARIES})
+    elseif(DESKTOP_BACKEND STREQUAL "sdl1")
+        add_compile_definitions(USE_SDL1)
+
+        find_package(SDL REQUIRED)
+        target_include_directories(butterscotch PUBLIC ${SDL_INCLUDE_DIR})
+        set(BACKEND_LIBRARIES ${SDL_LIBRARY})
+    elseif(DESKTOP_BACKEND STREQUAL "sdl2")
+        add_compile_definitions(USE_SDL2)
+
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(SDL2 REQUIRED sdl2)
+        target_include_directories(butterscotch PRIVATE ${SDL2_INCLUDE_DIRS})
+        target_link_directories(butterscotch PRIVATE ${SDL2_LIBRARY_DIRS})
+        set(BACKEND_LIBRARIES ${SDL2_LIBRARIES})
+    elseif(DESKTOP_BACKEND STREQUAL "sdl3")
+        add_compile_definitions(USE_SDL3)
+
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(SDL3 REQUIRED sdl3)
+        target_include_directories(butterscotch PRIVATE ${SDL3_INCLUDE_DIRS})
+        target_link_directories(butterscotch PRIVATE ${SDL3_LIBRARY_DIRS})
+        set(BACKEND_LIBRARIES ${SDL3_LIBRARIES})
+    elseif(DESKTOP_BACKEND STREQUAL "appkit")
+        add_compile_definitions(USE_APPKIT)
+        target_compile_definitions(butterscotch PRIVATE GL_SILENCE_DEPRECATION)
+        set(BACKEND_LIBRARIES "-framework Cocoa" "-framework GameController")
+    endif()
+    target_link_libraries(butterscotch PRIVATE ${BACKEND_LIBRARIES} ${AUDIO_LIBRARIES} ${PLATFORM_LIBRARIES})
+    if(DESKTOP_BACKEND STREQUAL "appkit")
+        target_sources(butterscotch PRIVATE src/desktop/backends/${DESKTOP_BACKEND}.m)
+    else()
+        target_sources(butterscotch PRIVATE src/desktop/backends/${DESKTOP_BACKEND}.c)
     endif()
 
     # Enable AddressSanitizer by default in Debug builds
@@ -162,7 +306,7 @@ if(PLATFORM STREQUAL "glfw")
         set(ENABLE_ASAN_DEFAULT OFF)
     endif()
     set(ENABLE_ASAN ${ENABLE_ASAN_DEFAULT} CACHE BOOL "Enable AddressSanitizer")
-    if(ENABLE_ASAN AND NOT MINGW AND NOT CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+    if(ENABLE_ASAN AND NOT WIN32 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Haiku")
         target_compile_options(butterscotch PRIVATE -fsanitize=address -fno-omit-frame-pointer)
         target_link_options(butterscotch PRIVATE -fsanitize=address)
     endif()
@@ -173,146 +317,11 @@ if(PLATFORM STREQUAL "glfw")
             ${CMAKE_SOURCE_DIR}/vendor/gamecontrollerdb.txt
             $<TARGET_FILE_DIR:butterscotch>/gamecontrollerdb.txt
     )
-elseif(PLATFORM STREQUAL "wiiu")
-    add_compile_definitions(USE_FLOAT_REALS)
-    add_compile_definitions(NO_RVALUE_INT64)
-    # find_package(SDL2 CONFIG REQUIRED)
-    target_sources(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/gl/image_decoder.c)
-    target_compile_definitions(butterscotch PRIVATE BUTTERSCOTCH_WIIU_APP_FOLDER="${BUTTERSCOTCH_WIIU_APP_FOLDER}")
-
-    if(DEFINED ENV{DEVKITPRO} AND NOT "$ENV{DEVKITPRO}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{DEVKITPRO}" DEVKITPRO_ROOT)
-    elseif(EXISTS "C:/devkitPro")
-        file(TO_CMAKE_PATH "C:/devkitPro" DEVKITPRO_ROOT)
-    else()
-        message(FATAL_ERROR "DEVKITPRO is not set and C:/devkitPro was not found.")
-    endif()
-
-    # data.win and bytecode blobs are serialized little-endian, but Wii U's PowerPC CPU is big-endian.
-    target_compile_definitions(butterscotch PRIVATE IS_BIG_ENDIAN)
-
-    target_compile_options(butterscotch PRIVATE
-        -O3
-        -ffunction-sections -fdata-sections
-        -fsingle-precision-constant
-        -fomit-frame-pointer
-        -ffast-math
-    )
-
-    target_include_directories(butterscotch PRIVATE
-        ${CMAKE_SOURCE_DIR}/vendor
-        ${CMAKE_SOURCE_DIR}/vendor/stb/image
-        ${CMAKE_SOURCE_DIR}/vendor/stb/vorbis
-        ${CMAKE_SOURCE_DIR}/vendor/miniaudio
-        ${DEVKITPRO_ROOT}/wut/include
-        ${DEVKITPRO_ROOT}/portlibs/wiiu/include
-        ${DEVKITPRO_ROOT}/portlibs/ppc/include
-    )
-
-    target_link_directories(butterscotch PRIVATE
-        ${DEVKITPRO_ROOT}/portlibs/wiiu/lib
-        ${DEVKITPRO_ROOT}/portlibs/ppc/lib
-    )
-    target_link_libraries(butterscotch PRIVATE bz2 SDL2)
-
-    set_target_properties(butterscotch PROPERTIES OUTPUT_NAME undertale)
-
-    if(NOT COMMAND wut_create_rpx)
-        message(FATAL_ERROR "wut_create_rpx is unavailable. Configure with the devkitPro Wii U toolchain file.")
-    endif()
-
-    wut_create_rpx(butterscotch)
-
-    wut_create_wuhb(butterscotch
-        NAME ${BUTTERSCOTCH_WIIU_NAME}
-        SHORTNAME ${BUTTERSCOTCH_WIIU_SHORTNAME}
-        AUTHOR "Toby Fox, Project Sunshine"
-        DRCSPLASH ${BUTTERSCOTCH_WIIU_DRC_SPLASH}
-        ICON ${BUTTERSCOTCH_WIIU_ICON}
-        TVSPLASH ${BUTTERSCOTCH_WIIU_TV_SPLASH}
-        CONTENT ${CMAKE_SOURCE_DIR}/resources/wiiu/content
-    )
-elseif(PLATFORM STREQUAL "wii")
-    add_compile_definitions(USE_FLOAT_REALS)
-    add_compile_definitions(NO_RVALUE_INT64)
-
-    target_sources(butterscotch PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/gl/image_decoder.c
-    )
-
-    if(DEFINED ENV{DEVKITPRO} AND NOT "$ENV{DEVKITPRO}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{DEVKITPRO}" DEVKITPRO_ROOT)
-    elseif(EXISTS "C:/devkitPro")
-        file(TO_CMAKE_PATH "C:/devkitPro" DEVKITPRO_ROOT)
-    else()
-        message(FATAL_ERROR "DEVKITPRO is not set and C:/devkitPro was not found.")
-    endif()
-
-    target_compile_definitions(butterscotch PRIVATE 
-        IS_BIG_ENDIAN
-        IMAGE_DECODER_HAS_BZ2=0
-    )
-
-    target_compile_options(butterscotch PRIVATE
-        -O3
-        -ffunction-sections
-        -fdata-sections
-        -fsingle-precision-constant
-        -fomit-frame-pointer
-        -ffast-math
-    )
-
-    target_include_directories(butterscotch PRIVATE
-        ${CMAKE_SOURCE_DIR}/vendor
-        ${CMAKE_SOURCE_DIR}/vendor/stb/image
-        ${CMAKE_SOURCE_DIR}/vendor/stb/vorbis
-        ${CMAKE_SOURCE_DIR}/vendor/miniaudio
-
-        ${DEVKITPRO_ROOT}/libogc/include
-        ${DEVKITPRO_ROOT}/portlibs/ppc/include
-        ${DEVKITPRO_ROOT}/portlibs/wii/include
-    )
-
-    target_link_directories(butterscotch PRIVATE
-        ${DEVKITPRO_ROOT}/portlibs/ppc/lib
-        ${DEVKITPRO_ROOT}/portlibs/wii/lib
-    )
-
-    # the wii is very strict with linking order so we do a group
-    target_link_libraries(butterscotch PRIVATE
-        -Wl,--start-group
-
-        grrlib
-        pngu
-        jpeg
-        
-        freetype
-        bz2
-
-        png
-        z
-
-        wiiuse
-        fat
-
-        modplay
-        aesnd
-
-        ogc
-        m
-
-        brotlidec
-        brotlicommon
-
-        -Wl,--end-group
-    )
-
-    set_target_properties(butterscotch PROPERTIES
-        OUTPUT_NAME boot
-    )
-
-    ogc_create_dol(butterscotch)
 elseif(PLATFORM STREQUAL "ps2")
+    file(GLOB DEBUG_FONT_SOURCES src/debug_font/*.c)
+    target_sources(butterscotch PRIVATE ${DEBUG_FONT_SOURCES})
+    target_include_directories(butterscotch PRIVATE ${CMAKE_SOURCE_DIR}/src/debug_font)
+
     # The PS2 EE has a single-precision FPU only, so double is software-emulated
     add_compile_definitions(USE_FLOAT_REALS)
     # By disabling Int64 support, we can fit the entire RValue struct in 8 bytes, improving performance and memory usage
@@ -350,32 +359,25 @@ elseif(PLATFORM STREQUAL "ps2")
 
     # Platform identifier for PS2-specific code paths (e.g., scratchpad allocation)
     add_compile_definitions(PLATFORM_PS2)
-    
+
     # PS2 renderer hot path logs
     option(ENABLE_PS2_RENDERER_LOGS "Enable hot path logs in the PS2 renderer" OFF)
     if(ENABLE_PS2_RENDERER_LOGS)
         add_compile_definitions(ENABLE_PS2_RENDERER_LOGS)
     endif()
 
-    # PS2 audio system
-    option(ENABLE_PS2_AUDIO "Enable the PS2 audio system" ON)
-    if(ENABLE_PS2_AUDIO)
-        add_compile_definitions(ENABLE_PS2_AUDIO)
-    else()
-        list(REMOVE_ITEM PLATFORM_SOURCES ${CMAKE_SOURCE_DIR}/src/ps2/ps2_audio_system.c)
-    endif()
-
     # -fsingle-precision-constant: Treat unsuffixed float constants as single-precision to avoid accidental  float->double promotions on platforms with no hardware double
     # -Werror=double-promotion: Warn when something is being promoted to a double
     # -fomit-frame-pointer: frees a register on a target with tight register pressure
     # -ffast-math: enables aggressive floating point optimizations
-    target_compile_options(butterscotch PRIVATE -fsingle-precision-constant -Werror=double-promotion -fomit-frame-pointer -ffast-math)
+    # -Wno-format: because there are too many formatting issues that, at the end of the day, do not matter
+    target_compile_options(butterscotch PRIVATE -fsingle-precision-constant -Werror=double-promotion -fomit-frame-pointer -ffast-math -Wno-format)
 
     if(PS2)
         # Compiling on the Docker container
         target_include_directories(butterscotch PRIVATE $ENV{PS2SDK}/ee/include $ENV{PS2SDK}/common/include $ENV{PS2DEV}/ee/include $ENV{GSKIT}/include)
         target_link_directories(butterscotch PRIVATE $ENV{PS2SDK}/ee/lib $ENV{GSKIT}/lib)
-        target_link_libraries(butterscotch gskit dmakit audsrv pad mc kbd patches kernel c m)
+        target_link_libraries(${AUDIO_LIBRARIES} butterscotch gskit dmakit audsrv pad mc kbd patches kernel c m stb_ds sha1)
 
         # Embed ps2sdk IRX modules (freesio2, freepad) as C arrays via bin2c
         # This avoids loading from rom0: which has compatibility issues between fat/slim PS2
@@ -420,7 +422,7 @@ elseif(PLATFORM STREQUAL "ps2")
             DEPENDS ${IRX_DIR}/ps2kbd.irx
             COMMENT "Embedding ps2kbd.irx"
         )
-        if(ENABLE_PS2_AUDIO)
+        if(AUDIO_BACKEND STREQUAL "ps2")
             add_custom_command(
                 OUTPUT ${IRX_GEN_DIR}/freesd_irx.c
                 COMMAND $ENV{PS2SDK}/bin/bin2c ${IRX_DIR}/freesd.irx ${IRX_GEN_DIR}/freesd_irx.c freesd_irx
@@ -436,7 +438,7 @@ elseif(PLATFORM STREQUAL "ps2")
         endif()
 
         target_sources(butterscotch PRIVATE ${IRX_GEN_DIR}/freesio2_irx.c ${IRX_GEN_DIR}/mcman_irx.c ${IRX_GEN_DIR}/mcserv_irx.c ${IRX_GEN_DIR}/freepad_irx.c ${IRX_GEN_DIR}/usbd_irx.c ${IRX_GEN_DIR}/ps2kbd_irx.c)
-        if(ENABLE_PS2_AUDIO)
+        if(AUDIO_BACKEND STREQUAL "ps2")
             target_sources(butterscotch PRIVATE ${IRX_GEN_DIR}/freesd_irx.c ${IRX_GEN_DIR}/audsrv_irx.c)
         endif()
         target_include_directories(butterscotch PRIVATE ${IRX_GEN_DIR})
@@ -497,78 +499,6 @@ elseif(PLATFORM STREQUAL "ps2")
                 ${CMAKE_SOURCE_DIR}/ps2dev-headers/newlib-include
                 ${CMAKE_SOURCE_DIR}/ps2dev-headers/gcc-include
         )
-    endif()
-elseif(PLATFORM STREQUAL "n3ds")
-    option(N3DS_ENABLE_LTO "Enable link-time optimization for the 3DS target" ON)
-    option(N3DS_ENABLE_FAST_MATH "Enable fast-math on the 3DS target" OFF)
-    option(N3DS_USE_FLOAT_REALS "Use float instead of double for GMLReal on the 3DS target" OFF)
-    option(N3DS_DISABLE_RVALUE_INT64 "Store oversized int64 values as reals/int32 on the 3DS target" OFF)
-    option(N3DS_ENABLE_PERF_LOGS "Enable periodic 3DS renderer perf logs" OFF)
-    option(N3DS_DISABLE_BOTTOM_SCREEN "Disable 3DS bottom-screen rendering" OFF)
-
-    if(DEFINED ENV{DEVKITPRO} AND NOT "$ENV{DEVKITPRO}" STREQUAL "")
-        file(TO_CMAKE_PATH "$ENV{DEVKITPRO}" DEVKITPRO_ROOT)
-    elseif(EXISTS "C:/devkitPro")
-        file(TO_CMAKE_PATH "C:/devkitPro" DEVKITPRO_ROOT)
-    else()
-        message(FATAL_ERROR "DEVKITPRO is not set and C:/devkitPro was not found.")
-    endif()
-
-    target_include_directories(butterscotch PRIVATE
-        ${DEVKITPRO_ROOT}/libctru/include
-        ${CMAKE_SOURCE_DIR}/vendor
-        ${CMAKE_SOURCE_DIR}/vendor/stb/ds
-    )
-
-    target_link_directories(butterscotch PRIVATE
-        ${DEVKITPRO_ROOT}/libctru/lib
-    )
-
-    target_compile_options(butterscotch PRIVATE
-        -O3
-        -fomit-frame-pointer
-        -ffunction-sections
-        -fdata-sections
-        $<$<CONFIG:MinSizeRel>:-Os>
-    )
-    target_link_options(butterscotch PRIVATE -Wl,--gc-sections)
-
-    if(N3DS_ENABLE_LTO)
-        target_compile_options(butterscotch PRIVATE -flto)
-        target_link_options(butterscotch PRIVATE -flto)
-    endif()
-    if(N3DS_ENABLE_FAST_MATH)
-        target_compile_options(butterscotch PRIVATE -ffast-math)
-    endif()
-    if(N3DS_USE_FLOAT_REALS)
-        target_compile_definitions(butterscotch PRIVATE USE_FLOAT_REALS)
-    endif()
-    if(N3DS_DISABLE_RVALUE_INT64)
-        target_compile_definitions(butterscotch PRIVATE NO_RVALUE_INT64)
-    endif()
-    if(N3DS_ENABLE_PERF_LOGS)
-        target_compile_definitions(butterscotch PRIVATE N3DS_ENABLE_PERF_LOGS)
-    endif()
-    if(N3DS_DISABLE_BOTTOM_SCREEN)
-        target_compile_definitions(butterscotch PRIVATE N3DS_DISABLE_BOTTOM_SCREEN)
-    endif()
-
-    target_link_libraries(butterscotch PRIVATE citro2d citro3d ctru m)
-    set_target_properties(butterscotch PROPERTIES OUTPUT_NAME cinnamon)
-
-    set(N3DS_ROMFS_DIR "${CMAKE_SOURCE_DIR}/resources/3ds/romfs")
-    set(N3DS_SMDH_FILE "${CMAKE_CURRENT_BINARY_DIR}/cinnamon.default.smdh")
-    ctr_generate_smdh(
-        OUTPUT "${N3DS_SMDH_FILE}"
-        NAME "${BUTTERSCOTCH_3DS_NAME}"
-        DESCRIPTION "${BUTTERSCOTCH_3DS_DESCRIPTION}"
-        AUTHOR "${BUTTERSCOTCH_3DS_AUTHOR}"
-        ICON "${CMAKE_SOURCE_DIR}/resources/3ds/meta/icon.png"
-    )
-    if(EXISTS "${N3DS_ROMFS_DIR}")
-        ctr_create_3dsx(cinnamon TARGET butterscotch SMDH "${N3DS_SMDH_FILE}" ROMFS "${N3DS_ROMFS_DIR}")
-    else()
-        ctr_create_3dsx(cinnamon TARGET butterscotch SMDH "${N3DS_SMDH_FILE}")
     endif()
 else()
     message(FATAL_ERROR "Unknown platform! ${PLATFORM}")
